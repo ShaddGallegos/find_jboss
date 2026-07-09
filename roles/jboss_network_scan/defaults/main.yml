@@ -1,6 +1,6 @@
 ---
 # Network to scan for reachable systems.
-jboss_scan_network_cidr: "192.168.0.0/24"
+jboss_scan_network_cidr: "10.34.95.0/24"
 
 # SSH settings used to probe each discovered host.
 jboss_scan_ssh_user: "{{ lookup('env', 'USER') }}"
