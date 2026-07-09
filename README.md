@@ -110,3 +110,4 @@ Permission denied during SSH checks:
 
 - Use a user with enough privileges to inspect services/processes/packages.
 - Consider adding sudo logic in the role if your environment requires it.
+# find_jboss
