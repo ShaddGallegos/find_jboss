@@ -1,0 +1,15 @@
+---
+# Network to scan for reachable systems.
+jboss_scan_network_cidr: "192.168.0.0/24"
+
+# SSH settings used to probe each discovered host.
+jboss_scan_ssh_user: "{{ lookup('env', 'USER') }}"
+jboss_scan_ssh_port: 22
+jboss_scan_ssh_private_key: ""
+jboss_scan_connect_timeout: 5
+
+# If true, skip hosts that do not have TCP/22 open before attempting SSH.
+jboss_scan_require_ssh_port_open: true
+
+# Optional additional SSH options.
+jboss_scan_extra_ssh_options: ""

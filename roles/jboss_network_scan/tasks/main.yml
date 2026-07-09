@@ -1,0 +1,110 @@
+---
+- name: Ensure nmap is available on the scanner host
+  ansible.builtin.command: "nmap --version"
+  changed_when: false
+
+- name: Discover live hosts in the target network
+  ansible.builtin.shell: |
+    set -o pipefail
+    nmap -n -sn {{ jboss_scan_network_cidr | quote }} -oG - | awk '/Up$/{print $2}'
+  args:
+    executable: /bin/bash
+  register: jboss_live_scan
+  changed_when: false
+
+- name: Build discovered host list
+  ansible.builtin.set_fact:
+    jboss_discovered_hosts: "{{ jboss_live_scan.stdout_lines | default([]) }}"
+
+- name: Show discovered hosts
+  ansible.builtin.debug:
+    msg:
+      - "Network scanned: {{ jboss_scan_network_cidr }}"
+      - "Discovered hosts: {{ jboss_discovered_hosts | length }}"
+      - "Hosts: {{ (jboss_discovered_hosts | length > 0) | ternary(jboss_discovered_hosts | join(', '), 'none') }}"
+
+- name: Initialize scan result lists
+  ansible.builtin.set_fact:
+    jboss_hosts_with_artifacts: []
+    jboss_hosts_without_artifacts: []
+    jboss_hosts_unreachable: []
+
+- name: Check JBoss artifacts on discovered hosts
+  ansible.builtin.shell: |
+    set -o pipefail
+    SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout={{ jboss_scan_connect_timeout | int }}"
+
+    if [ -n "{{ jboss_scan_ssh_private_key }}" ]; then
+      SSH_OPTS="$SSH_OPTS -i {{ jboss_scan_ssh_private_key | quote }}"
+    fi
+
+    if [ -n "{{ jboss_scan_extra_ssh_options }}" ]; then
+      SSH_OPTS="$SSH_OPTS {{ jboss_scan_extra_ssh_options }}"
+    fi
+
+    target="{{ jboss_scan_ssh_user }}@{{ item }}"
+
+    if [ "{{ jboss_scan_require_ssh_port_open | bool | ternary('1', '0') }}" = "1" ]; then
+      if ! nc -z -w {{ jboss_scan_connect_timeout | int }} {{ item }} {{ jboss_scan_ssh_port | int }} >/dev/null 2>&1; then
+        echo "SCAN_STATUS=unreachable"
+        exit 0
+      fi
+    fi
+
+    ssh $SSH_OPTS -p {{ jboss_scan_ssh_port | int }} "$target" '
+      found=0
+      reason=""
+
+      if rpm -qa 2>/dev/null | grep -Eiq "jboss|eap"; then
+        found=1
+        reason="rpm"
+      fi
+
+      if pgrep -fa "jboss|org.jboss" >/dev/null 2>&1; then
+        found=1
+        reason="${reason:+$reason,}process"
+      fi
+
+      if systemctl list-unit-files 2>/dev/null | grep -Eiq "jboss|eap"; then
+        found=1
+        reason="${reason:+$reason,}service"
+      fi
+
+      if [ -d /opt/jboss ] || [ -d /opt/rh/eap7 ] || [ -d /opt/rh/eap8 ] || [ -d /usr/share/jbossas ]; then
+        found=1
+        reason="${reason:+$reason,}filesystem"
+      fi
+
+      if [ "$found" -eq 1 ]; then
+        echo "SCAN_STATUS=jboss"
+        echo "SCAN_REASON=${reason}"
+      else
+        echo "SCAN_STATUS=clean"
+      fi
+    ' 2>/dev/null || echo "SCAN_STATUS=unreachable"
+  args:
+    executable: /bin/bash
+  register: jboss_host_checks
+  changed_when: false
+  loop: "{{ jboss_discovered_hosts }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Build summary buckets
+  ansible.builtin.set_fact:
+    jboss_hosts_with_artifacts: "{{ jboss_hosts_with_artifacts + [ item.item ] if 'SCAN_STATUS=jboss' in item.stdout else jboss_hosts_with_artifacts }}"
+    jboss_hosts_without_artifacts: "{{ jboss_hosts_without_artifacts + [ item.item ] if 'SCAN_STATUS=clean' in item.stdout else jboss_hosts_without_artifacts }}"
+    jboss_hosts_unreachable: "{{ jboss_hosts_unreachable + [ item.item ] if 'SCAN_STATUS=unreachable' in item.stdout else jboss_hosts_unreachable }}"
+  loop: "{{ jboss_host_checks.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Print JBoss artifact scan summary
+  ansible.builtin.debug:
+    msg:
+      - "JBoss scan summary for {{ jboss_scan_network_cidr }}"
+      - "Total discovered hosts: {{ jboss_discovered_hosts | length }}"
+      - "Hosts with JBoss artifacts: {{ jboss_hosts_with_artifacts | length }}"
+      - "Hosts without JBoss artifacts: {{ jboss_hosts_without_artifacts | length }}"
+      - "Hosts unreachable via SSH: {{ jboss_hosts_unreachable | length }}"
+      - "JBoss hosts: {{ (jboss_hosts_with_artifacts | length > 0) | ternary(jboss_hosts_with_artifacts | join(', '), 'none') }}"

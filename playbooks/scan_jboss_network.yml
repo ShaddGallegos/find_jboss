@@ -1,0 +1,8 @@
+---
+- name: Scan network for Red Hat JBoss artifacts
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  roles:
+    - role: jboss_network_scan
